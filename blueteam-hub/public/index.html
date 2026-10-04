@@ -1,0 +1,51 @@
+<!doctype html><html lang="az"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BlueTeam Hub</title>
+<style>
+:root{--bg:#0f1419;--p:#171d25;--b:#263040;--t:#e6edf3;--m:#8b98a8;--a:#3b9eff}
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--t);display:flex;height:100vh}
+nav{width:250px;background:var(--p);border-right:1px solid var(--b);overflow:auto;padding:12px 0;flex-shrink:0}
+nav h1{font-size:16px;padding:0 16px 10px;margin:0}nav a{display:block;padding:9px 16px;color:var(--m);cursor:pointer}
+nav a:hover,nav a.on{background:#1f2833;color:var(--t)}nav hr{border:0;border-top:1px solid var(--b);margin:8px 0}
+main{flex:1;padding:22px;overflow:auto}h2{margin-top:0}
+input,textarea{width:100%;background:var(--bg);border:1px solid var(--b);color:var(--t);padding:8px;border-radius:6px;margin:4px 0 12px}
+button{background:var(--a);color:#fff;border:0;padding:8px 14px;border-radius:6px;cursor:pointer;margin-right:6px}button.g{background:#2a3442}button.r{background:#c0392b}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}.card{background:var(--p);border:1px solid var(--b);border-radius:8px;padding:14px;cursor:pointer}
+.up{color:#3fb950}.dn{color:#f85149}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid var(--b);text-align:left}
+iframe{width:100%;height:70vh;border:1px solid var(--b);border-radius:6px;margin-top:12px;background:#fff}pre{background:var(--p);padding:12px;overflow:auto;max-height:50vh}
+#login{margin:15vh auto;width:320px}
+</style></head><body><div id="app" style="display:flex;width:100%"></div>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api=async(u,m='GET',b)=>{const r=await fetch('/api'+u,{method:m,headers:{'content-type':'application/json'},body:b?JSON.stringify(b):undefined});if(r.status===401){init();throw 0}return r.json()};
+let tools=[],cur='dash';
+async function init(){const s=await(await fetch('/api/state')).json();
+ if(!s.auth){$('#app').innerHTML=`<div id=login><h2>BlueTeam Hub</h2><p>${s.setup?'İlk quraşdırma: admin parolu yaradın (min 10 simvol)':'Daxil olun'}</p><input id=pw type=password placeholder="Parol"><button id=lg>${s.setup?'Yarat':'Daxil ol'}</button><p id=er class=dn></p></div>`;
+  const go=async()=>{const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('#pw').value})});r.ok?init():$('#er').textContent=(await r.json()).error};
+  $('#lg').onclick=go;$('#pw').onkeydown=e=>e.key==='Enter'&&go();return}
+ tools=await api('/tools');layout();show(cur)}
+function layout(){$('#app').innerHTML=`<nav><h1>🛡️ BlueTeam Hub</h1><a data-k=dash>Dashboard</a>${tools.map(t=>`<a data-k="${t.id}">${esc(t.name)}</a>`).join('')}<hr><a data-k=docker>Docker</a><a data-k=notify>Notification</a><hr><a data-k=add>＋ Yeni alət</a><a data-k=out>Çıxış</a></nav><main id=m></main>`;
+ document.querySelectorAll('nav a').forEach(a=>a.onclick=()=>show(a.dataset.k))}
+async function show(k){cur=k;document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.dataset.k===k));const m=$('#m');
+ if(k==='out'){await api('/logout','POST');return init()}
+ if(k==='add'){await api('/tools','POST',{name:'Yeni alət'});tools=await api('/tools');layout();return show(tools.at(-1).id)}
+ if(k==='dash'){m.innerHTML=`<h2>Dashboard</h2><div class=grid>${tools.map(t=>`<div class=card data-k="${t.id}"><b>${esc(t.name)}</b><div id="s${t.id}" class=dn>…</div><small>${esc(t.url||'URL yoxdur')}</small></div>`).join('')}</div>`;
+  m.querySelectorAll('.card').forEach(c=>c.onclick=()=>show(c.dataset.k));
+  tools.forEach(async t=>{const r=await api(`/tools/${t.id}/ping`);const e=$('#s'+t.id);if(e){e.className=r.up?'up':'dn';e.textContent=r.up?`● Online (${r.code}, ${r.ms}ms)`:'● Offline / URL yoxdur'}});return}
+ if(k==='docker')return docker();
+ if(k==='notify'){const n=await api('/notify');m.innerHTML=`<h2>Notification (Telegram)</h2><label>Bot token ${n.hasToken?'(saxlanılıb — dəyişmək üçün yazın)':''}</label><input id=tk type=password><label>Chat ID</label><input id=ch value="${esc(n.chat)}"><button id=sv>Saxla</button><button class=g id=ts>Test mesajı</button><p id=nr></p><p><small>Mail (SMTP) — sonrakı versiyada.</small></p>`;
+  $('#sv').onclick=async()=>{await api('/notify','PUT',{token:$('#tk').value,chat:$('#ch').value});$('#nr').textContent='Saxlanıldı'};
+  $('#ts').onclick=async()=>{const r=await api('/notify/test','POST',{});$('#nr').textContent=r.ok?'Göndərildi ✅':'Xəta: '+(r.error||r.status)};return}
+ const t=tools.find(x=>x.id===k);
+ m.innerHTML=`<h2>${esc(t.name)}</h2><label>Ad</label><input id=n value="${esc(t.name)}"><label>URL</label><input id=u value="${esc(t.url)}" placeholder="https://host:port"><label>İstifadəçi</label><input id=us value="${esc(t.user)}"><label>Parol / API açarı ${t.hasPass?'(saxlanılıb — dəyişmək üçün yazın)':''}</label><input id=p type=password autocomplete=new-password><label>Qeyd</label><textarea id=no rows=2>${esc(t.note)}</textarea>
+ <button id=sv>Saxla</button><button class=g id=op>Yeni tabda aç</button><button class=g id=fr>Burada aç (iframe)</button><button class=g id=cp>Parolu kopyala</button><button class=r id=dl>Sil</button><div id=fx></div>`;
+ $('#sv').onclick=async()=>{await api('/tools/'+k,'PUT',{name:$('#n').value,url:$('#u').value,user:$('#us').value,pass:$('#p').value,note:$('#no').value});tools=await api('/tools');layout();show(k)};
+ $('#op').onclick=()=>t.url&&window.open(t.url,'_blank','noopener');
+ $('#fr').onclick=()=>$('#fx').innerHTML=`<iframe src="${esc(t.url)}"></iframe><small>Boş görünürsə, sayt X-Frame-Options ilə bloklayır — "Yeni tabda aç" istifadə edin.</small>`;
+ $('#cp').onclick=async()=>{const r=await api(`/tools/${k}/secret`);navigator.clipboard.writeText(r.pass)};
+ $('#dl').onclick=async()=>{if(confirm('Silinsin?')){await api('/tools/'+k,'DELETE');tools=await api('/tools');layout();show('dash')}}}
+async function docker(){const m=$('#m');m.innerHTML='<h2>Docker</h2><p>Yüklənir…</p>';const r=await api('/docker');
+ if(r.error){m.innerHTML=`<h2>Docker</h2><p class=dn>${esc(r.error)}</p>`;return}
+ m.innerHTML=`<h2>Docker</h2><table><tr><th>Ad</th><th>İmage</th><th>Status</th><th>Əməliyyat</th></tr>${r.map(c=>`<tr><td>${esc(c.Names)}</td><td>${esc(c.Image)}</td><td class="${c.State==='running'?'up':'dn'}">${esc(c.Status)}</td><td><button data-a=start data-n="${esc(c.Names)}">Start</button><button class=r data-a=stop data-n="${esc(c.Names)}">Stop</button><button class=g data-a=restart data-n="${esc(c.Names)}">Restart</button><button class=g data-a=logs data-n="${esc(c.Names)}">Log</button></td></tr>`).join('')}</table><div id=lg></div>`;
+ m.querySelectorAll('button').forEach(b=>b.onclick=async()=>{const{a,n}=b.dataset;if(a==='logs'){const l=await api(`/docker/${n}/logs`);$('#lg').innerHTML=`<pre>${esc(l.log)}</pre>`;return}
+  if(a!=='start'&&!confirm(`${n}: ${a}?`))return;await api(`/docker/${n}/${a}`,'POST');docker()})}
+init();
+</script></body></html>

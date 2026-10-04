@@ -1,0 +1,48 @@
+const express=require('express'),crypto=require('crypto'),fs=require('fs'),path=require('path'),http=require('http'),https=require('https'),{execFile}=require('child_process');
+const D=path.join(__dirname,'data'),F=D+'/store.json',K=D+'/.key';
+fs.mkdirSync(D,{recursive:true,mode:0o700});
+if(!fs.existsSync(K))fs.writeFileSync(K,crypto.randomBytes(32).toString('hex'),{mode:0o600});
+const key=Buffer.from(fs.readFileSync(K,'utf8'),'hex');
+const enc=t=>{if(!t)return'';const iv=crypto.randomBytes(12),c=crypto.createCipheriv('aes-256-gcm',key,iv),e=Buffer.concat([c.update(t,'utf8'),c.final()]);return[iv,c.getAuthTag(),e].map(b=>b.toString('base64')).join('.')};
+const dec=s=>{if(!s)return'';const[iv,tag,e]=s.split('.').map(x=>Buffer.from(x,'base64')),d=crypto.createDecipheriv('aes-256-gcm',key,iv);d.setAuthTag(tag);return Buffer.concat([d.update(e),d.final()]).toString('utf8')};
+const DEF=['Wazuh 1 (Dashboard1)','Wazuh 2 (Dashboard2)','Grafana','Zabbix','OpenCTI','Integration (API)','iLO info','Kerio Control','MikroTik'];
+let db=fs.existsSync(F)?JSON.parse(fs.readFileSync(F)):{admin:null,tools:DEF.map((n,i)=>({id:'t'+i,name:n,url:'',user:'',pass:'',note:''})),notify:{}};
+const save=()=>fs.writeFileSync(F,JSON.stringify(db),{mode:0o600});
+const hash=(p,s)=>crypto.scryptSync(p,s,64).toString('hex');
+const sess=new Map(),fails=new Map();
+const tok=r=>(r.headers.cookie||'').split(';').map(c=>c.trim().split('=')).find(c=>c[0]==='sid')?.[1];
+const auth=(q,s,n)=>{const t=tok(q);if(t&&sess.get(t)>Date.now())return n();s.status(401).json({error:'auth'})};
+const app=express();app.use(express.json());app.use(express.static(path.join(__dirname,'public')));
+app.get('/api/state',(q,s)=>{const t=tok(q);s.json({setup:!db.admin,auth:!!(t&&sess.get(t)>Date.now())})});
+app.post('/api/login',(q,s)=>{
+  const ip=q.ip,f=fails.get(ip)||{n:0,t:0};
+  if(f.n>=5&&Date.now()-f.t<300000)return s.status(429).json({error:'Çox cəhd. 5 dəq gözləyin'});
+  const p=String(q.body.password||'');
+  if(!db.admin){if(p.length<10)return s.status(400).json({error:'Parol min 10 simvol'});const salt=crypto.randomBytes(16).toString('hex');db.admin={salt,h:hash(p,salt)};save()}
+  else if(!crypto.timingSafeEqual(Buffer.from(hash(p,db.admin.salt)),Buffer.from(db.admin.h))){fails.set(ip,{n:f.n+1,t:Date.now()});return s.status(401).json({error:'Yanlış parol'})}
+  fails.delete(ip);const t=crypto.randomBytes(32).toString('hex');sess.set(t,Date.now()+8*3600e3);
+  s.setHeader('Set-Cookie',`sid=${t}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`+(process.env.SECURE_COOKIE?'; Secure':''));s.json({ok:1})});
+app.post('/api/logout',(q,s)=>{sess.delete(tok(q));s.json({ok:1})});
+app.use('/api',auth);
+const pub=t=>({id:t.id,name:t.name,url:t.url,user:t.user,note:t.note,hasPass:!!t.pass});
+app.get('/api/tools',(q,s)=>s.json(db.tools.map(pub)));
+app.get('/api/tools/:id/secret',(q,s)=>{const t=db.tools.find(x=>x.id===q.params.id);t?s.json({pass:dec(t.pass)}):s.sendStatus(404)});
+app.post('/api/tools',(q,s)=>{const t={id:'t'+Date.now(),name:q.body.name||'Yeni',url:'',user:'',pass:'',note:''};db.tools.push(t);save();s.json(pub(t))});
+app.put('/api/tools/:id',(q,s)=>{const t=db.tools.find(x=>x.id===q.params.id);if(!t)return s.sendStatus(404);
+  for(const k of['name','url','user','note'])if(typeof q.body[k]==='string')t[k]=q.body[k];
+  if(typeof q.body.pass==='string'&&q.body.pass!=='')t.pass=enc(q.body.pass);save();s.json(pub(t))});
+app.delete('/api/tools/:id',(q,s)=>{db.tools=db.tools.filter(x=>x.id!==q.params.id);save();s.json({ok:1})});
+app.get('/api/tools/:id/ping',(q,s)=>{const t=db.tools.find(x=>x.id===q.params.id);if(!t||!/^https?:\/\//.test(t.url))return s.json({up:false});
+  const m=t.url.startsWith('https')?https:http,st=Date.now();
+  const r=m.request(t.url,{method:'GET',timeout:4000,rejectUnauthorized:false},x=>{x.resume();s.json({up:true,code:x.statusCode,ms:Date.now()-st})});
+  r.on('error',()=>s.json({up:false}));r.on('timeout',()=>r.destroy());r.end()});
+const dk=(a,cb)=>execFile('docker',a,{timeout:30000},(e,o,er)=>cb(e?(er||e.message):null,o));
+app.get('/api/docker',(q,s)=>dk(['ps','-a','--format','{{json .}}'],(e,o)=>e?s.status(500).json({error:e}):s.json(o.trim().split('\n').filter(Boolean).map(l=>JSON.parse(l)))));
+app.post('/api/docker/:name/:action',(q,s)=>{const{name,action}=q.params;
+  if(!/^[\w][\w.-]*$/.test(name)||!['start','stop','restart'].includes(action))return s.sendStatus(400);
+  dk([action,name],e=>e?s.status(500).json({error:e}):s.json({ok:1}))});
+app.get('/api/docker/:name/logs',(q,s)=>/^[\w][\w.-]*$/.test(q.params.name)?dk(['logs','--tail','100',q.params.name],(e,o)=>s.json({log:e||o})):s.sendStatus(400));
+app.get('/api/notify',(q,s)=>s.json({chat:db.notify.chat||'',hasToken:!!db.notify.token}));
+app.put('/api/notify',(q,s)=>{if(q.body.token)db.notify.token=enc(q.body.token);if(typeof q.body.chat==='string')db.notify.chat=q.body.chat;save();s.json({ok:1})});
+app.post('/api/notify/test',async(q,s)=>{try{const r=await fetch(`https://api.telegram.org/bot${dec(db.notify.token)}/sendMessage`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:db.notify.chat,text:q.body.text||'BlueTeam Hub: test mesajı ✅'})});s.json({ok:r.ok,status:r.status})}catch(e){s.status(500).json({error:e.message})}});
+app.listen(process.env.PORT||3000,process.env.HOST||'127.0.0.1',()=>console.log('BlueTeam Hub işləyir'));
