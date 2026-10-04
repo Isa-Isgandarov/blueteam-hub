@@ -18,7 +18,7 @@ const load=id=>new Promise(r=>{const s=document.createElement('script');s.src=`/
 async function init(){const s=await(await fetch('/api/state')).json(),app=document.querySelector('#app');
  if(!s.auth){app.innerHTML=`<div id=login><h2>🛡️ BlueTeam Hub</h2><p>${s.setup?'İlk quraşdırma: admin parolu yaradın (min 10 simvol)':'Daxil olun'}</p><input id=pw type=password placeholder="Parol"><button id=lg>${s.setup?'Yarat':'Daxil ol'}</button><p id=er class=dn></p></div>`;
   const go=async()=>{const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:document.querySelector('#pw').value})});r.ok?init():document.querySelector('#er').textContent=(await r.json()).error};
-  document.querySelector('#lg').onclick=go;document.querySelector('#pw').onkeydown=e=>e.key==='Enter'&&go();return}
+  document.querySelector('#lg').onclick=go;document.querySelector('#pw').onkeydown=e=>{if(e.key==='Enter')go()};return}
  const L=await BT.api('/modules');await Promise.all(L.map(m=>load(m.id)));
  app.innerHTML=`<nav><h1>🛡️ BlueTeam Hub</h1>${L.map(m=>`<a data-k="${m.id}">${BT.esc(m.title)}</a>`).join('')}<hr><a data-k=out>Çıxış</a></nav><main id=m></main>`;
  app.querySelectorAll('nav a').forEach(a=>a.onclick=()=>BT.show(a.dataset.k));BT.show('dashboard')}
